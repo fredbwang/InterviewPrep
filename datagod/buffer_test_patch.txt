@@ -1,0 +1,28 @@
+
+    def test_concurrent_writes(self):
+        """Test concurrent writes from multiple threads to ensure thread safety."""
+        num_threads = 10
+        writes_per_thread = 100
+        data_per_write = "x" * 10  # 10 bytes per write
+
+        def worker():
+            for _ in range(writes_per_thread):
+                self.buffer_writer.write(data_per_write)
+
+        threads = []
+        for _ in range(num_threads):
+            t = threading.Thread(target=worker)
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        # Flush any remaining data
+        self.buffer_writer.flush()
+
+        # Check total data written
+        total_disk_data = "".join(self.buffer_writer.disk)
+        total_expected_len = num_threads * writes_per_thread * len(data_per_write)
+        
+        self.assertEqual(len(total_disk_data), total_expected_len)
