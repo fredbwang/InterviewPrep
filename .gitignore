@@ -40,3 +40,5 @@ Image_2025*
 # Image Processing Pipeline
 anthropic/Coding/ImageProcessingPipeline/out/
 **/ImageProcessingPipeline/out/
+anthropic/Coding/ImageProcessingPipeline/images/
+**/ImageProcessingPipeline/images/

@@ -138,5 +138,5 @@ if __name__ == "__main__":
     processor = ImageProcessor("out")
     
     # processor.run_sequential(images, pipelines)
-    processor.run_parallel(images, pipelines, max_workers=4)
+    processor.run_parallel(images, pipelines, max_workers=10)
 
