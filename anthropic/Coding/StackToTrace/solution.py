@@ -53,62 +53,58 @@ def convert_to_trace_filtered(samples: List[Sample], n_consecutive: int) -> List
     Follow-up: Prune brief function calls.
     Only emit events for functions that appear in N consecutive samples.
     """
+    if not samples:
+        return []
+        
     events = []
-    prev_stack = [] # This tracks the *effective* stack (only events we actually admitted)
     
-    for i, sample in enumerate(samples):
+    class ActiveFrame:
+        def __init__(self, name, start_ts):
+            self.name = name
+            self.start_ts = start_ts
+            self.count = 1
+            self.emitted = False
+            
+    active_stack: List[ActiveFrame] = []
+    
+    for sample in samples:
         curr_raw_stack = sample.stack
         ts = sample.ts
         
-        # Determine which functions in the current raw stack are "valid"
-        # A function at index `d` is valid if it appears in samples[i...i+n-1] at index `d`
-        # AND it matches the name.
-        # Ideally, the parent chain must also be valid.
-        
-        curr_effective_stack = []
-        for d, func_name in enumerate(curr_raw_stack):
-            # Check if this specific frame persists for N samples
-            is_persistent = True
-            if i + n_consecutive > len(samples):
-                is_persistent = False
-            else:
-                for k in range(1, n_consecutive):
-                    future_sample = samples[i+k]
-                    # Check bounds and name match
-                    if d >= len(future_sample.stack) or future_sample.stack[d] != func_name:
-                        is_persistent = False
-                        break
+        # 1. Compute Longest Common Prefix (LCP) with active stack
+        lcp = 0
+        min_len = min(len(active_stack), len(curr_raw_stack))
+        while lcp < min_len and active_stack[lcp].name == curr_raw_stack[lcp]:
+            lcp += 1
             
-            # If persistent, add to effective stack. 
-            # Note: If parent is not persistent, child cannot be persistent in a valid trace?
-            # Or can we have gaps? "Nested function call's end event is before enclosing".
-            # If parent is pruned, the child is orphaned. 
-            # Usually, if parent is pruned, child is implicitly pruned or merged.
-            # We'll assume strict hierarchy: if parent is pruned, stop.
-            if is_persistent:
-                curr_effective_stack.append(func_name)
-            else:
-                break # Stop adding children if parent is not valid
-        
-        # Now perform standard diff logic between prev_stack (effective) and curr_effective_stack
-        lcp_len = 0
-        min_len = min(len(prev_stack), len(curr_effective_stack))
-        while lcp_len < min_len and prev_stack[lcp_len] == curr_effective_stack[lcp_len]:
-            lcp_len += 1
+        # 2. Handle runs that ended (prune from top)
+        # These frames are no longer present in the current stack
+        while len(active_stack) > lcp:
+            frame = active_stack.pop()
+            if frame.emitted:
+                events.append(Event("end", ts, frame.name))
+                
+        # 3. Handle continuing runs (increment count, maybe emit)
+        for i in range(lcp):
+            frame = active_stack[i]
+            frame.count += 1
+            if frame.count >= n_consecutive and not frame.emitted:
+                events.append(Event("start", frame.start_ts, frame.name))
+                frame.emitted = True
+                
+        # 4. Handle new runs (add to stack)
+        for i in range(lcp, len(curr_raw_stack)):
+            name = curr_raw_stack[i]
+            new_frame = ActiveFrame(name, ts)
             
-        # Ends
-        for idx in range(len(prev_stack) - 1, lcp_len - 1, -1):
-            events.append(Event("end", ts, prev_stack[idx]))
+            # Special case for N=1: emit immediately
+            if n_consecutive <= 1:
+                events.append(Event("start", ts, name))
+                new_frame.emitted = True
+                    
+            active_stack.append(new_frame)
             
-        # Starts 
-        # Note: Use the timestamp of the *first* sample where it appeared?
-        # The prompt says: "You can decide if you want to use the 1st or Nth timestamp for the start time".
-        # We'll use the current sample's timestamp (1st).
-        for idx in range(lcp_len, len(curr_effective_stack)):
-            events.append(Event("start", ts, curr_effective_stack[idx]))
-            
-        prev_stack = curr_effective_stack
-
+    events.sort(key=lambda x: (x.ts, 0 if x.kind == 'start' else 1))
     return events
 
 
