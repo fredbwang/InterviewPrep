@@ -3,7 +3,7 @@ import json
 import time
 from typing import List, Any
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
+import multiprocessing
 from PIL import Image, ImageOps, ImageFilter
 
 # --- Core Processing Logic (Must be picklable for Multiprocessing) ---
@@ -34,11 +34,11 @@ def apply_pipeline_to_image(img_path: str, pipeline_steps: List[dict], output_di
                 
                 # --- Map Transformations ---
                 if op == "grayscale":
-                    processed_img = processed_img.convert("L")
+                    processed_img = ImageOps.grayscale(processed_img)
                 elif op == "flip_horizontally":
-                    processed_img = processed_img.transpose(Image.FLIP_LEFT_RIGHT)
+                    processed_img = ImageOps.mirror(processed_img)
                 elif op == "flip_vertically":
-                    processed_img = processed_img.transpose(Image.FLIP_TOP_BOTTOM)
+                    processed_img = ImageOps.flip(processed_img)
                 elif op == "scale":
                     factor = args[0]
                     # Pillow resize requires integer size
@@ -47,10 +47,8 @@ def apply_pipeline_to_image(img_path: str, pipeline_steps: List[dict], output_di
                 elif op == "rotate":
                     processed_img = processed_img.rotate(args[0])
                 elif op == "blur":
-                    # GaussianBlur takes radius, ImageFilter.BLUR is fixed
-                    # Check docs if args provided radius
                     radius = args[0] if args else 2
-                    processed_img = processed_img.filter(ImageFilter.GaussianBlur(radius))
+                    processed_img = processed_img.filter(ImageFilter.BoxBlur(radius))
                 else:
                     print(f"Unknown op: {op}")
 
@@ -105,11 +103,43 @@ class ImageProcessor:
                 res = job.result()
                 if "Error" in str(res): print(res)
                 
-        print(f"Parallel finished in {time.time() - start:.4f}s")
+    def run_parallel_multiprocessing(self, images: List[str], pipelines: dict, max_workers=None):
+        """
+        Use multiprocessing.Pool for CPU-bound image transformations.
+        """
+        print(f"Running Parallel (Multiprocessing) with {max_workers} workers...")
+        start = time.time()
+        
+        # Prepare arguments for starmap
+        tasks = []
+        for img_path in images:
+            for pipe_name, steps in pipelines.items():
+                tasks.append((img_path, steps, self.output_dir, pipe_name))
+        
+        with multiprocessing.Pool(processes=max_workers) as pool:
+            results = pool.starmap(apply_pipeline_to_image, tasks)
+            
+            for res in results:
+                if "Error" in str(res): print(res)
+                
+        print(f"Parallel (Multiprocessing) finished in {time.time() - start:.4f}s")
+
+
+def load_pipelines_from_json(json_path: str) -> dict:
+    try:
+        with open(json_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Error: Pipeline config file '{json_path}' not found.")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        return {}
 
 
 if __name__ == "__main__":
     input_dir = "images"
+    pipeline_config_file = "pipelines.json"
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".gif"}
     
     if not os.path.exists(input_dir):
@@ -129,14 +159,16 @@ if __name__ == "__main__":
 
     print(f"Found {len(images)} images to process.")
 
-    pipelines = {
-        "p1": [{"transform": "scale", "args": [0.5]}, {"transform": "grayscale"}],
-        "p2": [{"transform": "blur", "args": [5]}, {"transform": "flip_horizontally"}],
-        "p3": [{"transform": "rotate", "args": [90]}, {"transform": "flip_vertically"}],
-    }
+    # Load pipelines from JSON
+    pipelines = load_pipelines_from_json(pipeline_config_file)
+    if not pipelines:
+        print("No valid pipelines loaded. Exiting.")
+        exit(1)
 
     processor = ImageProcessor("out")
     
     # processor.run_sequential(images, pipelines)
-    processor.run_parallel(images, pipelines, max_workers=10)
+    # processor.run_parallel(images, pipelines, max_workers=10)
+    processor.run_parallel_multiprocessing(images, pipelines, max_workers=10)
+
 
