@@ -74,13 +74,13 @@ This solution provides three crawling strategies for comparison:
     - Useful for establishing a performance baseline.
     - **Pros:** Simple, predictable. **Cons:** Very slow (network latency binds every step).
 
-2.  **Parallel BFS (Worker Pool):**
+2.  **BFS with Worker Pool:**
     - Spawns a fixed number of long-lived worker tasks (e.g., `max_concurrency=5`).
     - Workers pull URLs from a shared `asyncio.Queue`.
     - **Pros:** Standard industry pattern, easy to control resource usage via worker count.
     - **Cons:** Slightly more complex code (managing worker lifecycle).
 
-3.  **Dynamic Futures (Bag of Tasks):**
+3.  **BFS with Dynamic Futures:**
     - **Interview Star Pattern.**
     - Does NOT use fixed workers. Instead, maintains a set of `pending` Future/Task objects.
     - Uses `asyncio.wait(pending, return_when=FIRST_COMPLETED)` to react immediately when *any* request finishes.
