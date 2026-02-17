@@ -42,3 +42,6 @@ anthropic/Coding/ImageProcessingPipeline/out/
 **/ImageProcessingPipeline/out/
 anthropic/Coding/ImageProcessingPipeline/images/
 **/ImageProcessingPipeline/images/
+
+crawler_output.txt
+anthropic/Coding/WebCrawler/crawler_output.txt

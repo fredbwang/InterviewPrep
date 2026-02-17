@@ -24,7 +24,7 @@ This question has evolved from a simple BFS crawler to one focused on **Concurre
     - **Do NOT** start with manual `Threading` + `Lock` primitives unless asked. It's error-prone and "old school".
     - **DO** use `concurrent.futures.ThreadPoolExecutor` or `asyncio`.
 3.  **Async/Await Nuance:**
-    - Using `requests` inside `asyncio` blocks the event loop! You MUST use an async library like `aiohttp`.
+    - Using `requests` inside `asyncio` blocks the event loop! You MUST use an async library like `aiohttp` or `httpx`.
     - Don't forget `await` keywords (classic failure point).
 
 ### Helpful References
@@ -63,17 +63,51 @@ The specific source (1131484) highlights these System Design follow-ups for Seni
     - *Problem:* Many URLs point to same content (e.g., mirrors, query params).
     - *Solution:* Compute **Content Hash** (MD5/SHA) of the HTML body. Store `Hash -> URL` map. If hash exists, skip processing. Use **Locality Sensitive Hashing (LSH)** or **MinHash** to detect near-duplicates.
 
-### Part 1: Single Threaded
-- Standard BFS using `deque`.
-- `urllib.parse.urlparse` to handle hostname check and fragment removal.
+---
 
-### Part 2: Multi-Threaded (The Expectation)
-- Use `ThreadPoolExecutor`.
-- **Shared State:** A thread-safe `visited` set (or use a `Lock` around a standard set).
+### Implemented Solution (`solution_async_httpx.py`)
 
-### Part 3: AsyncIO (The Advanced Follow-up)
-- Use `aiohttp` for non-blocking HTTP requests.
-- Use `BeautifulSoup` (which is blocking/CPU-bound) cautiously. Ideally run it in a thread executor if parsing heavy HTML, but for simple tasks, running it inline is often accepted in interviews or wrapped in `asyncio.to_thread`.
-- **Recursion vs Queue:**
-    - `await asyncio.gather(*[dfs(u) for u in links])` works but can blow the stack on deep crawls.
-    - **Better:** Use `asyncio.Queue` and a fix set of workers.
+This solution provides three crawling strategies for comparison:
+
+1.  **Sequential (Baseline):**
+    - Fetches one URL at a time.
+    - Useful for establishing a performance baseline.
+    - **Pros:** Simple, predictable. **Cons:** Very slow (network latency binds every step).
+
+2.  **Parallel BFS (Worker Pool):**
+    - Spawns a fixed number of long-lived worker tasks (e.g., `max_concurrency=5`).
+    - Workers pull URLs from a shared `asyncio.Queue`.
+    - **Pros:** Standard industry pattern, easy to control resource usage via worker count.
+    - **Cons:** Slightly more complex code (managing worker lifecycle).
+
+3.  **Dynamic Futures (Bag of Tasks):**
+    - **Interview Star Pattern.**
+    - Does NOT use fixed workers. Instead, maintains a set of `pending` Future/Task objects.
+    - Uses `asyncio.wait(pending, return_when=FIRST_COMPLETED)` to react immediately when *any* request finishes.
+    - **Critical Safety:** Uses an `asyncio.Semaphore` inside the fetch function to limit active network connections, decoupling *scheduling* (unbounded) from *resources* (bounded).
+    - **Pros:** Maximum scheduling efficiency, elegant code, demonstrates deep AsyncIO mastery.
+
+---
+
+### Distributed Crawling Optimization (Follow-up Answer)
+
+**Scenario:** "What if we have multiple servers? How to optimize?"
+
+**1. Centralized State (Redis/Kafka)**
+   - Replace the local `asyncio.Queue` with a reliable shared queue (e.g., **Redis List** or **Kafka Topic**).
+   - All crawler instances (workers) across different servers pull tasks from this central source.
+
+**2. Distributed Deduplication**
+   - Local properties like `self.visited = set()` no longer work because workers don't share memory.
+   - **Solution:** Use **Redis Sets** for exact deduplication (fast, atomic).
+   - **Optimization:** For massive scale (billions of URLs), use a **Bloom Filter** (Redis-backed) to reduce memory usage from GBs to MBs, accepting a tiny false-positive rate (skipping a valid URL is better than infinite loops).
+
+**3. Partitioning / Sharding (Consistent Hashing)**
+   - To avoid "politeness" issues (100 servers hammering `example.com` simultaneously), sharding is required.
+   - **Logic:** `Hash(domain) % num_partitions` determines which queue/worker handles that domain.
+   - This ensures strict per-domain rate limiting can be enforced locally on the assigned worker.
+
+**4. Failure Handling (Ack Mechanism)**
+   - If a server crashes holding a URL, that URL is lost.
+   - **Solution:** Use a "Reliable Queue" pattern (e.g., Redis `RPOPLPUSH`).
+   - Move URL to a `processing` list when fetching. Only remove when done. A separate monitor process re-queues items from `processing` that have been stuck too long (timeout).
